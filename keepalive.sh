@@ -5,6 +5,13 @@
 # openclaw/agent/model availability: agent crons proved circular on 2026-07-02
 # when a container restart killed the claude bridge, which killed the very
 # agent crons that were supposed to revive it.
+#
+# HARD RULE learned from the 2026-07-02 boot-hang outage: NEVER capture an
+# ensure script's output with command substitution. The ensure scripts spawn
+# daemons; any daemon that inherits our stdout pipe keeps $(...) waiting
+# forever even after the script itself exits — which held up start.sh and
+# failed the whole deployment. All script output goes to the log FILE (an fd
+# daemons may safely keep open), and every script gets a hard timeout.
 LOG_SELF="/data/.gbrain/keepalive.log"
 TS_LOG="/data/.tailscale/tailscaled.log"
 STAMP="/data/.gbrain/keepalive.stamp"
@@ -23,12 +30,15 @@ done
 run() {
   name="$1"; script="$2"
   if [ ! -f "$script" ]; then
-    echo "$(date -u +%FT%TZ) $name MISSING $script"
+    echo "$(date -u +%FT%TZ) $name MISSING $script" >> "$LOG_SELF"
     return
   fi
-  out=$(bash "$script" 2>&1); rc=$?
+  # </dev/null: no stdin; >>file: daemons inheriting these fds cannot block us;
+  # timeout: a wedged script dies instead of stalling boot or piling up crons.
+  timeout 45 bash "$script" </dev/null >>"$LOG_SELF" 2>&1
+  rc=$?
   if [ "$rc" -ne 0 ]; then
-    echo "$(date -u +%FT%TZ) $name rc=$rc ${out:0:200}"
+    echo "$(date -u +%FT%TZ) $name rc=$rc (124=timeout)" >> "$LOG_SELF"
   fi
 }
 
@@ -40,7 +50,7 @@ run tailscaled  /data/.tailscale/ensure-tailscale.sh
 # later round will restart it to fix the flag. When already Running this
 # breaks out on the first iteration.
 for _ in $(seq 1 20); do
-  state=$(/data/.local/bin/tailscale --socket=/var/run/tailscale/tailscaled.sock status --json 2>/dev/null \
+  state=$(timeout 3 /data/.local/bin/tailscale --socket=/var/run/tailscale/tailscaled.sock status --json 2>/dev/null \
     | sed -n 's/.*"BackendState": "\([^"]*\)".*/\1/p' | head -1)
   [ "$state" = "Running" ] && break
   sleep 1
