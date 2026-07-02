@@ -33,6 +33,19 @@ run() {
 }
 
 run tailscaled  /data/.tailscale/ensure-tailscale.sh
+
+# On a cold boot tailscaled needs a few seconds to reach Running; if we race
+# ahead, the serve mapping no-ops and ensure-http-server.sh detects no tailnet
+# DNS name and starts gbrain WITHOUT --public-url — and once it's healthy no
+# later round will restart it to fix the flag. When already Running this
+# breaks out on the first iteration.
+for _ in $(seq 1 20); do
+  state=$(/data/.local/bin/tailscale --socket=/var/run/tailscale/tailscaled.sock status --json 2>/dev/null \
+    | sed -n 's/.*"BackendState": "\([^"]*\)".*/\1/p' | head -1)
+  [ "$state" = "Running" ] && break
+  sleep 1
+done
+
 run serve-map   /data/.tailscale/ensure-gbrain-serve.sh
 run gbrain-http /data/.gbrain/ensure-http-server.sh
 run bridge      /data/gbrain-claude-bridge/ensure-proxy.sh
