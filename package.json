@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@chrysb/alphaclaw": "0.9.18",
-    "openclaw": "2026.6.11"
+    "openclaw": "2026.7.1"
   },
   "overrides": {
     "openclaw": "$openclaw"
